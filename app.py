@@ -1,5 +1,3 @@
-
-
 import keras
 from keras.layers import Dense
 
@@ -10,7 +8,6 @@ def patched_dense_init(self, *args, **kwargs):
     original_dense_init(self, *args, **kwargs)
 
 Dense.__init__ = patched_dense_init
-
 
 
 import io
@@ -26,19 +23,12 @@ from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 
-# =========================================================
-# FASTAPI INIT
-# =========================================================
 
 app = FastAPI(
     title="Nutrify API",
     description="Indonesian Food Recognition API",
     version="2.0.0"
 )
-
-# =========================================================
-# CORS
-# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,43 +38,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================================================
-# CONFIG
-# =========================================================
-
 IMG_SIZE = 224
-
 MODEL_PATH = "nutrify_model.keras"
 CLASS_NAMES_PATH = "class_names.json"
 NUTRITION_CSV = "indonesian_food_clean.csv"
 
-# THRESHOLDS
-# Top-1 < REJECT_THRESHOLD       -> return unknown_food (kemungkinan bukan makanan / luar 25 kelas)
-# REJECT_THRESHOLD <= Top-1 < WARN_THRESHOLD -> return prediksi + warning
-# Top-1 >= WARN_THRESHOLD        -> return prediksi tanpa warning
+# top-1 < 0.40 -> unknown, 0.40-0.60 -> warning, >= 0.60 -> clean
 REJECT_THRESHOLD = 0.40
 WARN_THRESHOLD = 0.60
 
-# TEMPERATURE SCALING
-# Model dilatih dengan L2NormalizationLayer di arsitektur, yang bikin
-# softmax output flat (top-1 confidence selalu sekitar 4-10%).
-# Temperature scaling re-scale log-probs supaya distribusi probabilitas
-# kembali ke range realistis (food yakin: 80-95%, ragu: 50-70%, non-food: <15%).
-# Set TEMPERATURE = 1.0 kalau pakai model versi B (tanpa L2Norm, sudah retrain).
-# Nilai 5.0 didapat dari simulasi 3 skenario (confident/uncertain/non-food).
+# L2Norm di arsitektur bikin softmax flat (~4-10%), temperature re-scale supaya distribusi realistis
 TEMPERATURE = 5.0
 
-# Whitelist penyakit yang valid (single-select)
 VALID_DISEASES = {"obesitas", "diabetes", "hipertensi", "asam_urat", "kolesterol"}
 
-# =========================================================
-# CUSTOM LAYER (versi A - lama, perlu temperature scaling)
-# =========================================================
 
 @tf.keras.utils.register_keras_serializable()
 class L2NormalizationLayer(tf.keras.layers.Layer):
-    """Versi LAMA - dipakai di model yang udah ada. Bikin softmax kompres.
-    Dikompensasi dengan TEMPERATURE scaling di runtime."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -96,15 +66,8 @@ class L2NormalizationLayer(tf.keras.layers.Layer):
         return super().get_config()
 
 
-# =========================================================
-# CUSTOM LAYER (versi B - baru, hasil retrain notebook)
-# =========================================================
-
 @tf.keras.utils.register_keras_serializable()
 class ScaledDenseLayer(tf.keras.layers.Layer):
-    """Versi BARU - Dense + learnable scale factor.
-    Output = s * (W . input + b), dengan s learnable.
-    Cocok untuk classification, gak perlu temperature scaling di runtime."""
 
     def __init__(self, units, initial_scale=10.0, **kwargs):
         super().__init__(**kwargs)
@@ -144,9 +107,6 @@ class ScaledDenseLayer(tf.keras.layers.Layer):
         })
         return config
 
-# =========================================================
-# CUSTOM LOSS
-# =========================================================
 
 @tf.keras.utils.register_keras_serializable()
 class FocalLoss(tf.keras.losses.Loss):
@@ -158,29 +118,15 @@ class FocalLoss(tf.keras.losses.Loss):
         self.num_classes = num_classes
 
     def call(self, y_true, y_pred):
-
         y_true = tf.cast(
-            tf.one_hot(
-                tf.cast(y_true, tf.int32),
-                self.num_classes
-            ),
+            tf.one_hot(tf.cast(y_true, tf.int32), self.num_classes),
             tf.float32
         )
-
         y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0)
-
         cross_entropy = -y_true * tf.math.log(y_pred)
-
-        focal_weight = self.alpha * tf.pow(
-            1.0 - y_pred,
-            self.gamma
-        )
-
+        focal_weight = self.alpha * tf.pow(1.0 - y_pred, self.gamma)
         loss = focal_weight * cross_entropy
-
-        return tf.reduce_mean(
-            tf.reduce_sum(loss, axis=-1)
-        )
+        return tf.reduce_mean(tf.reduce_sum(loss, axis=-1))
 
     def get_config(self):
         config = super().get_config()
@@ -191,9 +137,6 @@ class FocalLoss(tf.keras.losses.Loss):
         })
         return config
 
-# =========================================================
-# LOAD MODEL
-# =========================================================
 
 print("Loading Nutrify model...")
 
@@ -209,79 +152,45 @@ model = tf.keras.models.load_model(
 
 print("Model loaded successfully!")
 
-# Auto-detect model version: kalau ada L2NormalizationLayer, butuh temperature scaling.
-# Kalau ada ScaledDenseLayer (model retrain), TEMPERATURE bisa 1.0.
 _layer_names = [type(l).__name__ for l in model.layers]
 _has_l2norm = 'L2NormalizationLayer' in _layer_names
 _has_scaled = 'ScaledDenseLayer' in _layer_names
+
 if _has_scaled and not _has_l2norm:
-    print(f"Model versi B (ScaledDenseLayer) terdeteksi -> TEMPERATURE diabaikan (di-set 1.0)")
+    print(f"ScaledDenseLayer detected -> TEMPERATURE set to 1.0")
     TEMPERATURE = 1.0
 elif _has_l2norm:
-    print(f"Model versi A (L2NormalizationLayer) terdeteksi -> apply TEMPERATURE = {TEMPERATURE}")
+    print(f"L2NormalizationLayer detected -> TEMPERATURE = {TEMPERATURE}")
 else:
-    print(f"Model arsitektur tidak dikenali -> apply TEMPERATURE = {TEMPERATURE}")
+    print(f"Unknown architecture -> TEMPERATURE = {TEMPERATURE}")
 
-# =========================================================
-# LOAD CLASS NAMES
-# =========================================================
 
 with open(CLASS_NAMES_PATH, "r") as f:
     class_names = json.load(f)
 
 print(f"Loaded {len(class_names)} classes")
 
-# =========================================================
-# LOAD NUTRITION DATA
-# =========================================================
-
 nutrition_df = pd.read_csv(NUTRITION_CSV)
 print("Nutrition data loaded!")
 
-# =========================================================
-# PREPROCESS IMAGE
-# =========================================================
 
 def preprocess_image(image):
-
-    # RGB
     image = image.convert("RGB")
-
-    # Resize
     image = image.resize((IMG_SIZE, IMG_SIZE))
-
-    # Convert ke numpy
     image = np.array(image).astype(np.float32)
-
-    # SAME preprocessing as training
     image = tf.keras.applications.efficientnet.preprocess_input(image)
-
-    # Batch dimension
     image = np.expand_dims(image, axis=0)
-
     return image
 
-# =========================================================
-# GET NUTRITION
-# =========================================================
 
 def get_nutrition(food_name):
-
     normalized_food = food_name.replace("_", " ").lower().strip()
-
     result = nutrition_df[
-        nutrition_df["food_name"]
-        .str.lower()
-        .str.strip()
-        ==
-        normalized_food
+        nutrition_df["food_name"].str.lower().str.strip() == normalized_food
     ]
-
     if result.empty:
         return None
-
     row = result.iloc[0]
-
     return {
         "calories": float(row["calories"]),
         "protein": float(row["protein"]),
@@ -292,12 +201,8 @@ def get_nutrition(food_name):
         "fiber": float(row["fiber"])
     }
 
-# =========================================================
-# RECOMMENDATION ENGINE - PERSONAL BERDASARKAN PENYAKIT
-# =========================================================
 
 def _check_diabetes(nutrition):
-    """Aturan: batasi gula & karbohidrat sederhana, fokus sugar"""
     issues = []
     if nutrition["sugar"] >= 15:
         issues.append(f"kandungan gula {nutrition['sugar']:.1f}g tergolong sangat tinggi")
@@ -308,7 +213,6 @@ def _check_diabetes(nutrition):
     return issues
 
 def _check_hipertensi(nutrition):
-    """Aturan: batasi sodium (garam). Threshold: >=600mg high, >=400mg sedang"""
     issues = []
     sodium = nutrition["sodium"]
     if sodium >= 600:
@@ -318,7 +222,6 @@ def _check_hipertensi(nutrition):
     return issues
 
 def _check_obesitas(nutrition):
-    """Aturan: batasi kalori & lemak total"""
     issues = []
     if nutrition["calories"] >= 300:
         issues.append(f"kalori {nutrition['calories']:.0f} kcal tergolong tinggi")
@@ -329,9 +232,7 @@ def _check_obesitas(nutrition):
     return issues
 
 def _check_asam_urat(nutrition, food_name):
-    """Aturan: hindari makanan tinggi purin (daging merah, jeroan, seafood)"""
     issues = []
-    # Pattern match buat makanan tinggi purin
     name_lower = food_name.lower().replace("_", " ")
     high_purin_keywords = [
         "daging", "rawon", "sate", "burger sapi", "ikan",
@@ -346,7 +247,6 @@ def _check_asam_urat(nutrition, food_name):
     return issues
 
 def _check_kolesterol(nutrition, food_name):
-    """Aturan: batasi lemak total + waspada makanan goreng/santan/jeroan"""
     issues = []
     name_lower = food_name.lower().replace("_", " ")
     if nutrition["fat"] >= 15:
@@ -360,13 +260,6 @@ def _check_kolesterol(nutrition, food_name):
 
 
 def generate_recommendation(food_name, nutrition, disease=None):
-    """Generate recommendation berdasarkan kondisi user.
-
-    Args:
-        food_name: nama makanan (dari class_names)
-        nutrition: dict nutrisi (atau None kalau gak ketemu di DB)
-        disease: salah satu dari VALID_DISEASES, atau None (= umum)
-    """
     if nutrition is None:
         return "Data nutrisi tidak tersedia untuk makanan ini."
 
@@ -375,7 +268,6 @@ def generate_recommendation(food_name, nutrition, disease=None):
     protein = nutrition["protein"]
     fat = nutrition["fat"]
 
-    # === MODE PERSONAL: ADA DISEASE ===
     if disease and disease in VALID_DISEASES:
         if disease == "diabetes":
             issues = _check_diabetes(nutrition)
@@ -394,26 +286,22 @@ def generate_recommendation(food_name, nutrition, disease=None):
             disease_label = "kolesterol tinggi"
 
         if not issues:
-            # Aman dikonsumsi
             return (
                 f"{display_name} relatif aman untuk kondisi {disease_label} Anda. "
                 f"Per 100g: {cal:.0f} kcal, protein {protein:.1f}g, lemak {fat:.1f}g. "
                 f"Tetap perhatikan porsi konsumsi total harian."
             )
         elif len(issues) == 1:
-            # Hati-hati
             return (
                 f"Untuk penderita {disease_label}, {display_name} sebaiknya dikonsumsi dengan hati-hati "
                 f"karena {issues[0]}. Disarankan kurangi porsi atau cari alternatif."
             )
         else:
-            # Hindari/batasi
             return (
                 f"Untuk penderita {disease_label}, {display_name} sebaiknya dibatasi atau dihindari karena: "
                 f"{', '.join(issues)}. Konsultasikan dengan ahli gizi untuk pengaturan diet yang tepat."
             )
 
-    # === MODE UMUM: NO DISEASE ===
     if cal < 150:
         category = "rendah kalori dan cocok untuk diet"
     elif cal < 300:
@@ -440,9 +328,6 @@ def generate_recommendation(food_name, nutrition, disease=None):
         f"Lemak sebesar {fat:.1f}g {fat_text}"
     )
 
-# =========================================================
-# ROUTES
-# =========================================================
 
 @app.get("/")
 def home():
@@ -462,29 +347,17 @@ def health():
 
 @app.get("/diseases")
 def list_diseases():
-    """List kondisi penyakit yang didukung untuk personal recommendation"""
     return {
         "valid_diseases": sorted(VALID_DISEASES),
         "note": "Field 'disease' di /predict bersifat optional. Kalau kosong, recommendation umum."
     }
 
-# =========================================================
-# PREDICT ROUTE
-# =========================================================
 
 @app.post("/predict")
 async def predict(
     image: UploadFile = File(...),
     disease: Optional[str] = Form(default=None),
 ):
-    """Predict food + nutrition + personalized recommendation.
-
-    Form fields:
-    - image (file, required): gambar makanan
-    - disease (str, optional): salah satu dari [obesitas, diabetes, hipertensi, asam_urat, kolesterol]
-    """
-
-    # Validate disease
     if disease is not None and disease.strip() != "":
         disease = disease.strip().lower()
         if disease not in VALID_DISEASES:
@@ -495,67 +368,32 @@ async def predict(
     else:
         disease = None
 
-    # Validate image content-type
     if not image.content_type or not image.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="File yang diupload harus gambar."
-        )
+        raise HTTPException(status_code=400, detail="File yang diupload harus gambar.")
 
     try:
-        # =================================================
-        # READ IMAGE
-        # =================================================
         image_bytes = await image.read()
         pil_image = Image.open(io.BytesIO(image_bytes))
-
-        # =================================================
-        # PREPROCESS
-        # =================================================
         processed_image = preprocess_image(pil_image)
 
-        # =================================================
-        # PREDICTION
-        # =================================================
         predictions = model.predict(processed_image, verbose=0)[0]
 
-        # =================================================
-        # TEMPERATURE SCALING
-        # =================================================
-        # Re-scale softmax output untuk compensate L2Norm di arsitektur.
-        # Logika: ambil log-probs (reverse softmax), kalikan dengan temperature,
-        # lalu apply softmax lagi.
-        # Urutan top-3 tetap sama (monotonic transform), cuma distribusi
-        # probability-nya jadi realistic (gak flat di ~4-10%).
         if TEMPERATURE != 1.0:
             log_probs = np.log(predictions + 1e-9)
             scaled_log_probs = log_probs * TEMPERATURE
-            # Numerical stable softmax (subtract max biar gak overflow)
             scaled_log_probs = scaled_log_probs - scaled_log_probs.max()
             exp_scaled = np.exp(scaled_log_probs)
             predictions = exp_scaled / exp_scaled.sum()
 
-        # =================================================
-        # TOP 3
-        # =================================================
-        top_k = 3
-        top_indices = np.argsort(predictions)[::-1][:top_k]
-
-        top_predictions = []
-        for idx in top_indices:
-            top_predictions.append({
-                "food_name": class_names[idx],
-                "confidence_score": round(float(predictions[idx]), 4)
-            })
+        top_indices = np.argsort(predictions)[::-1][:3]
+        top_predictions = [
+            {"food_name": class_names[idx], "confidence_score": round(float(predictions[idx]), 4)}
+            for idx in top_indices
+        ]
 
         best_food = class_names[top_indices[0]]
         best_confidence = float(predictions[top_indices[0]])
 
-        # =================================================
-        # NON-FOOD / UNKNOWN HANDLE
-        # =================================================
-        # Kalau confidence terlalu rendah, anggap bukan makanan
-        # yang dikenali (kemungkinan: objek lain / makanan luar 25 kelas)
         if best_confidence < REJECT_THRESHOLD:
             return {
                 "success": False,
@@ -568,19 +406,9 @@ async def predict(
                 }
             }
 
-        # =================================================
-        # NUTRITION
-        # =================================================
         nutrition = get_nutrition(best_food)
-
-        # =================================================
-        # RECOMMENDATION (personal/umum tergantung disease)
-        # =================================================
         recommendation = generate_recommendation(best_food, nutrition, disease=disease)
 
-        # =================================================
-        # WARNING
-        # =================================================
         warning = None
         if best_confidence < WARN_THRESHOLD:
             warning = (
@@ -588,9 +416,6 @@ async def predict(
                 "Coba gunakan foto yang lebih jelas dengan fokus ke satu makanan di tengah."
             )
 
-        # =================================================
-        # RESPONSE (format sesuai spec damasdev)
-        # =================================================
         return {
             "success": True,
             "best_prediction": {
@@ -607,4 +432,3 @@ async def predict(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
