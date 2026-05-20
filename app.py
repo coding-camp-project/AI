@@ -43,9 +43,9 @@ MODEL_PATH = "nutrify_model.keras"
 CLASS_NAMES_PATH = "class_names.json"
 NUTRITION_CSV = "indonesian_food_clean.csv"
 
-# top-1 < 0.40 -> unknown, 0.40-0.60 -> warning, >= 0.60 -> clean
-REJECT_THRESHOLD = 0.40
-WARN_THRESHOLD = 0.60
+# top-1 < 0.10 -> unknown, 0.10-0.40 -> warning, >= 0.40 -> clean
+REJECT_THRESHOLD = 0.10
+WARN_THRESHOLD = 0.40
 
 # L2Norm di arsitektur bikin softmax flat (~4-10%), temperature re-scale supaya distribusi realistis
 TEMPERATURE = 5.0
