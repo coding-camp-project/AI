@@ -202,6 +202,178 @@ def get_nutrition(food_name):
     }
 
 
+# =========================================================
+# MANUAL FOOD INPUT - tabel konversi, parser teks, search
+# =========================================================
+# Semua nilai nutrisi di CSV adalah per 100g. Nutrisi final dihitung:
+#   nutrisi = nilai_csv * (gram / 100)
+
+# Tabel konversi satuan -> gram (angka kasar, bisa disesuaikan)
+UNIT_TO_GRAM = {
+    "porsi": 150,
+    "piring": 200,
+    "mangkok": 200,
+    "mangkuk": 200,
+    "potong": 50,
+    "buah": 100,
+    "butir": 55,        # cth: telur
+    "biji": 30,
+    "lembar": 20,
+    "iris": 25,
+    "sendok makan": 15,
+    "sdm": 15,
+    "sendok teh": 5,
+    "sdt": 5,
+    "gelas": 240,
+    "cangkir": 200,
+    "centong": 100,
+    "bungkus": 100,
+    "tusuk": 30,        # cth: sate
+    "gram": 1,
+    "g": 1,
+    "ons": 100,
+    "kg": 1000,
+}
+
+# Default kalau satuan tidak dikenali / tidak ditulis
+DEFAULT_GRAM = 100
+
+# Kata bilangan -> angka (untuk teks "satu", "dua", dst)
+WORD_TO_NUM = {
+    "satu": 1, "dua": 2, "tiga": 3, "empat": 4, "lima": 5,
+    "enam": 6, "tujuh": 7, "delapan": 8, "sembilan": 9, "sepuluh": 10,
+    "setengah": 0.5, "seperempat": 0.25,
+}
+
+
+def parse_quantity(text):
+    """Ekstrak jumlah (angka) dari potongan teks.
+    Support: '2', '1/2', '0.5', 'dua', 'setengah'. Return float.
+    """
+    import re
+    text = text.lower().strip()
+
+    # Pecahan: 1/2, 3/4
+    frac = re.search(r'(\d+)\s*/\s*(\d+)', text)
+    if frac:
+        num, den = int(frac.group(1)), int(frac.group(2))
+        return num / den if den != 0 else 1.0
+
+    # Desimal / bulat: 1.5, 2
+    dec = re.search(r'(\d+\.?\d*)', text)
+    if dec:
+        return float(dec.group(1))
+
+    # Kata bilangan
+    for word, num in WORD_TO_NUM.items():
+        if word in text:
+            return float(num)
+
+    return 1.0  # default 1 kalau tidak ada angka
+
+
+def parse_unit(text):
+    """Deteksi satuan dari teks. Return (nama_satuan, gram_per_unit)."""
+    text = text.lower()
+    # Cek satuan multi-kata dulu (sendok makan sebelum 'sendok')
+    for unit in sorted(UNIT_TO_GRAM.keys(), key=len, reverse=True):
+        if unit in text:
+            return unit, UNIT_TO_GRAM[unit]
+    return None, DEFAULT_GRAM
+
+
+def parse_food_text(text):
+    """Pecah teks bebas jadi list item makanan.
+    Input : 'nasi putih 1 porsi, ayam goreng 2 potong'
+    Output: [
+        {'raw': 'nasi putih 1 porsi', 'name_guess': 'nasi putih',
+         'quantity': 1.0, 'unit': 'porsi', 'gram_per_unit': 150},
+        ...
+    ]
+    """
+    import re
+    items = []
+    # Pisah per item: koma, titik koma, atau ' dan '
+    chunks = re.split(r'[,;]|\sdan\s', text)
+
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+
+        quantity = parse_quantity(chunk)
+        unit, gram_per_unit = parse_unit(chunk)
+
+        # Nama makanan = teks setelah buang angka, pecahan, dan satuan
+        name = chunk.lower()
+        name = re.sub(r'\d+\s*/\s*\d+', '', name)   # buang pecahan
+        name = re.sub(r'\d+\.?\d*', '', name)        # buang angka
+        # Buang kata bilangan (pakai word boundary)
+        for w in WORD_TO_NUM:
+            name = re.sub(r'\b' + re.escape(w) + r'\b', '', name)
+        # Buang kata satuan (pakai word boundary biar 'g' tidak menghapus
+        # huruf di tengah kata seperti 'goren[g]')
+        for u in sorted(UNIT_TO_GRAM.keys(), key=len, reverse=True):
+            name = re.sub(r'\b' + re.escape(u) + r'\b', '', name)
+        name = re.sub(r'\s+', ' ', name).strip(' -.')
+
+        items.append({
+            "raw": chunk,
+            "name_guess": name,
+            "quantity": quantity,
+            "unit": unit or "porsi",
+            "gram_per_unit": gram_per_unit,
+        })
+    return items
+
+
+def search_food_candidates(query, limit=5):
+    """Cari kandidat makanan di CSV berdasarkan query teks.
+    Return list nama makanan, urut dari paling relevan.
+    Strategi: exact > startswith > contains semua kata > contains sebagian.
+    """
+    query = query.lower().strip()
+    if not query:
+        return []
+
+    food_lower = nutrition_df["food_name"].str.lower().str.strip()
+    query_words = query.split()
+
+    scored = []
+    for idx, fname in food_lower.items():
+        score = 0
+        if fname == query:
+            score = 100
+        elif fname.startswith(query):
+            score = 80
+        elif query in fname:
+            score = 60
+        elif all(w in fname for w in query_words):
+            score = 40
+        else:
+            # hitung berapa kata query yang muncul
+            matched = sum(1 for w in query_words if w in fname)
+            if matched > 0:
+                score = 10 * matched
+        if score > 0:
+            # makanan dengan nama lebih pendek = lebih relevan (tie-breaker)
+            scored.append((score, -len(fname), nutrition_df.loc[idx, "food_name"]))
+
+    scored.sort(reverse=True)
+    return [name for _, _, name in scored[:limit]]
+
+
+def calc_nutrition_scaled(food_name, grams):
+    """Hitung nutrisi makanan untuk jumlah gram tertentu.
+    CSV per 100g, jadi scaled = nilai_csv * (grams / 100).
+    """
+    base = get_nutrition(food_name)
+    if base is None:
+        return None
+    factor = grams / 100.0
+    return {k: round(v * factor, 2) for k, v in base.items()}
+
+
 def _check_diabetes(nutrition):
     issues = []
     if nutrition["sugar"] >= 15:
@@ -333,17 +505,15 @@ def generate_recommendation(food_name, nutrition, disease=None):
 def home():
     return {
         "message": "Nutrify API is running!",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "endpoints": {
-            "POST /predict": "Upload food image (multipart/form-data: image + optional disease)",
+            "POST /predict": "Analisis makanan: gambar, manual items, atau keduanya",
+            "GET /search-food": "Cari kandidat makanan di database (untuk input manual)",
             "GET /health": "Health check",
-            "GET /diseases": "List supported disease conditions"
+            "GET /diseases": "List supported disease conditions",
+            "GET /units": "List satuan porsi yang didukung"
         }
     }
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
 @app.get("/diseases")
 def list_diseases():
@@ -352,12 +522,82 @@ def list_diseases():
         "note": "Field 'disease' di /predict bersifat optional. Kalau kosong, recommendation umum."
     }
 
+@app.get("/units")
+def list_units():
+    """List satuan porsi yang dikenali + konversi gram-nya."""
+    return {
+        "units": UNIT_TO_GRAM,
+        "default_gram": DEFAULT_GRAM,
+        "note": "Nilai konversi bersifat estimasi kasar."
+    }
+
+
+@app.get("/search-food")
+def search_food(q: str, limit: int = 5):
+    """Cari kandidat makanan di database CSV.
+
+    Dipakai frontend saat user mengetik nama makanan di input manual.
+    User ketik 'ayam goreng' -> dapat daftar kandidat -> user pilih satu.
+
+    Query params:
+    - q     : teks pencarian (nama makanan)
+    - limit : jumlah kandidat maksimal (default 5)
+    """
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="Parameter 'q' tidak boleh kosong.")
+
+    limit = max(1, min(limit, 20))
+    candidates = search_food_candidates(q.strip(), limit=limit)
+
+    # Sertakan preview nutrisi per 100g untuk tiap kandidat
+    results = []
+    for name in candidates:
+        nut = get_nutrition(name)
+        results.append({
+            "food_name": name,
+            "nutrition_per_100g": nut,
+        })
+
+    return {
+        "query": q.strip(),
+        "count": len(results),
+        "candidates": results,
+    }
+
+
+def _sum_nutrition(list_of_nutrition):
+    """Jumlahkan beberapa dict nutrisi jadi satu total."""
+    keys = ["calories", "protein", "fat", "carbohydrates", "sugar", "sodium", "fiber"]
+    total = {k: 0.0 for k in keys}
+    for nut in list_of_nutrition:
+        if not nut:
+            continue
+        for k in keys:
+            total[k] += nut.get(k, 0) or 0
+    return {k: round(v, 2) for k, v in total.items()}
+
 
 @app.post("/predict")
 async def predict(
-    image: UploadFile = File(...),
+    image: Optional[UploadFile] = File(default=None),
     disease: Optional[str] = Form(default=None),
+    manual_items: Optional[str] = Form(default=None),
 ):
+    """Analisis makanan. Fleksibel - terima salah satu / kombinasi:
+
+    Form fields:
+    - image        (file, opsional)  : foto makanan
+    - manual_items (str, opsional)   : JSON list item makanan yang sudah dipilih
+                                       user dari /search-food. Format tiap item:
+                                       {"food_name": "...", "quantity": 1.5, "unit": "porsi"}
+    - disease      (str, opsional)   : riwayat penyakit untuk recommendation
+
+    Skenario:
+    1. image saja            -> deteksi model
+    2. manual_items saja     -> hitung nutrisi dari item yang dipilih
+    3. image + manual_items  -> gabung: hasil gambar + item manual
+    """
+    # --- Validasi disease ---
     if disease is not None and disease.strip() != "":
         disease = disease.strip().lower()
         if disease not in VALID_DISEASES:
@@ -368,65 +608,168 @@ async def predict(
     else:
         disease = None
 
-    if not image.content_type or not image.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File yang diupload harus gambar.")
-
-    try:
-        image_bytes = await image.read()
-        pil_image = Image.open(io.BytesIO(image_bytes))
-        processed_image = preprocess_image(pil_image)
-
-        predictions = model.predict(processed_image, verbose=0)[0]
-
-        if TEMPERATURE != 1.0:
-            log_probs = np.log(predictions + 1e-9)
-            scaled_log_probs = log_probs * TEMPERATURE
-            scaled_log_probs = scaled_log_probs - scaled_log_probs.max()
-            exp_scaled = np.exp(scaled_log_probs)
-            predictions = exp_scaled / exp_scaled.sum()
-
-        top_indices = np.argsort(predictions)[::-1][:3]
-        top_predictions = [
-            {"food_name": class_names[idx], "confidence_score": round(float(predictions[idx]), 4)}
-            for idx in top_indices
-        ]
-
-        best_food = class_names[top_indices[0]]
-        best_confidence = float(predictions[top_indices[0]])
-
-        if best_confidence < REJECT_THRESHOLD:
-            return {
-                "success": False,
-                "error": "unknown_food",
-                "message": "Gambar tidak terdeteksi sebagai makanan Indonesia yang dikenali sistem.",
-                "suggestion": "Pastikan gambar berisi makanan dengan pencahayaan cukup. Sistem hanya mendukung 25 jenis makanan Indonesia.",
-                "debug_info": {
-                    "top_confidence": round(best_confidence, 4),
-                    "threshold": REJECT_THRESHOLD
-                }
-            }
-
-        nutrition = get_nutrition(best_food)
-        recommendation = generate_recommendation(best_food, nutrition, disease=disease)
-
-        warning = None
-        if best_confidence < WARN_THRESHOLD:
-            warning = (
-                "Model kurang yakin terhadap gambar. "
-                "Coba gunakan foto yang lebih jelas dengan fokus ke satu makanan di tengah."
+    # --- Parse manual_items (JSON) ---
+    parsed_manual = []
+    if manual_items and manual_items.strip():
+        try:
+            parsed_manual = json.loads(manual_items)
+            if not isinstance(parsed_manual, list):
+                raise ValueError("manual_items harus berupa list")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Format manual_items tidak valid: {e}. "
+                       f"Harus JSON list of objects."
             )
 
-        return {
-            "success": True,
-            "best_prediction": {
-                "food_name": best_food,
-                "confidence_score": round(best_confidence, 4)
-            },
-            "top_predictions": top_predictions,
-            "nutrition": nutrition,
-            "recommendation": recommendation,
-            "warning": warning
-        }
+    # Minimal salah satu harus ada
+    has_image = image is not None and image.filename
+    if not has_image and not parsed_manual:
+        raise HTTPException(
+            status_code=400,
+            detail="Minimal salah satu wajib diisi: 'image' atau 'manual_items'."
+        )
+
+    try:
+        result = {"success": True}
+        nutrition_parts = []   # kumpulan nutrisi untuk grand total
+        primary_food_name = None   # untuk recommendation
+
+        # =================================================
+        # BAGIAN 1: GAMBAR (kalau ada)
+        # =================================================
+        image_result = None
+        if has_image:
+            if not image.content_type or not image.content_type.startswith("image/"):
+                raise HTTPException(status_code=400, detail="File harus berupa gambar.")
+
+            image_bytes = await image.read()
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            processed_image = preprocess_image(pil_image)
+
+            predictions = model.predict(processed_image, verbose=0)[0]
+
+            if TEMPERATURE != 1.0:
+                log_probs = np.log(predictions + 1e-9)
+                scaled_log_probs = log_probs * TEMPERATURE
+                scaled_log_probs = scaled_log_probs - scaled_log_probs.max()
+                exp_scaled = np.exp(scaled_log_probs)
+                predictions = exp_scaled / exp_scaled.sum()
+
+            top_indices = np.argsort(predictions)[::-1][:3]
+            top_predictions = [
+                {"food_name": class_names[idx],
+                 "confidence_score": round(float(predictions[idx]), 4)}
+                for idx in top_indices
+            ]
+            best_food = class_names[top_indices[0]]
+            best_confidence = float(predictions[top_indices[0]])
+
+            if best_confidence < REJECT_THRESHOLD:
+                # Gambar tidak dikenali
+                image_result = {
+                    "recognized": False,
+                    "message": "Gambar tidak terdeteksi sebagai makanan yang dikenali sistem.",
+                    "suggestion": "Gunakan input manual untuk makanan ini, atau foto lebih jelas.",
+                    "top_confidence": round(best_confidence, 4),
+                }
+                # Kalau tidak ada manual_items, ini benar-benar gagal
+                if not parsed_manual:
+                    return {
+                        "success": False,
+                        "error": "unknown_food",
+                        "message": "Gambar tidak dikenali dan tidak ada input manual.",
+                        "suggestion": "Tambahkan input manual makanan, atau foto lebih jelas.",
+                        "image_result": image_result,
+                    }
+            else:
+                nut = get_nutrition(best_food)
+                image_result = {
+                    "recognized": True,
+                    "best_prediction": {
+                        "food_name": best_food,
+                        "confidence_score": round(best_confidence, 4),
+                    },
+                    "top_predictions": top_predictions,
+                    "nutrition": nut,
+                    "warning": (
+                        "Model kurang yakin terhadap gambar."
+                        if best_confidence < WARN_THRESHOLD else None
+                    ),
+                }
+                if nut:
+                    nutrition_parts.append(nut)
+                primary_food_name = best_food
+
+        # =================================================
+        # BAGIAN 2: MANUAL ITEMS (kalau ada)
+        # =================================================
+        manual_result = []
+        if parsed_manual:
+            for item in parsed_manual:
+                food_name = (item.get("food_name") or "").strip()
+                quantity = item.get("quantity", 1)
+                unit = (item.get("unit") or "porsi").strip().lower()
+
+                if not food_name:
+                    continue
+
+                try:
+                    quantity = float(quantity)
+                except (TypeError, ValueError):
+                    quantity = 1.0
+
+                # Konversi ke gram
+                gram_per_unit = UNIT_TO_GRAM.get(unit, DEFAULT_GRAM)
+                total_gram = quantity * gram_per_unit
+
+                # Hitung nutrisi
+                scaled = calc_nutrition_scaled(food_name, total_gram)
+
+                item_result = {
+                    "food_name": food_name,
+                    "quantity": quantity,
+                    "unit": unit,
+                    "total_gram": round(total_gram, 1),
+                    "nutrition": scaled,
+                }
+                if scaled is None:
+                    item_result["error"] = (
+                        f"'{food_name}' tidak ditemukan di database. "
+                        f"Pastikan nama persis sesuai hasil /search-food."
+                    )
+                else:
+                    nutrition_parts.append(scaled)
+                    if primary_food_name is None:
+                        primary_food_name = food_name
+
+                manual_result.append(item_result)
+
+
+        grand_total = _sum_nutrition(nutrition_parts)
+
+        # Recommendation berdasarkan grand total (pakai nama "makanan gabungan"
+        # kalau lebih dari 1 sumber)
+        n_sources = len(nutrition_parts)
+        if n_sources == 0:
+            recommendation = "Tidak ada data nutrisi yang bisa dianalisis."
+        elif n_sources == 1 and primary_food_name:
+            recommendation = generate_recommendation(
+                primary_food_name, grand_total, disease=disease
+            )
+        else:
+            # Banyak item - kasih rekomendasi untuk total gabungan
+            recommendation = generate_recommendation(
+                "kombinasi makanan", grand_total, disease=disease
+            )
+
+        result["image_result"] = image_result
+        result["manual_items"] = manual_result if parsed_manual else None
+        result["grand_total_nutrition"] = grand_total
+        result["recommendation"] = recommendation
+        result["sources_count"] = n_sources
+
+        return result
 
     except HTTPException:
         raise
