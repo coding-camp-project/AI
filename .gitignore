@@ -1,6 +1,10 @@
 # Environment
 venv/
 .venv/
+env/
+
+# Secret config
+.env
 
 # Python cache
 __pycache__/
@@ -14,4 +18,3 @@ __pycache__/
 .idea/
 
 .vercel
-.env*
