@@ -17,8 +17,4 @@ __pycache__/
 .vscode/
 .idea/
 
-# ML Models & Dataset
-indonesian_food_clean.csv
-best_model.keras
-nutrify_model.keras
 .vercel
