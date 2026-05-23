@@ -59,7 +59,8 @@ six==1.17.0
 starlette==1.0.1
 tensorboard==2.19.0
 tensorboard-data-server==0.7.2
-tensorflow==2.19.0
+tensorflow-cpu==2.19.0 ; sys_platform == 'linux'
+tensorflow==2.19.0 ; sys_platform == 'win32'
 termcolor==3.3.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
