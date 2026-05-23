@@ -21,3 +21,4 @@ __pycache__/
 indonesian_food_clean.csv
 best_model.keras
 nutrify_model.keras
+.vercel
