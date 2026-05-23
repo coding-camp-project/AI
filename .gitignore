@@ -16,3 +16,10 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+./indonesian_food_clean.csv
+/indonesian_food_clean.csv
+./best_model.keras
+/best_model.keras
+./nutrify_model.keras
+/nutrify_model.keras
