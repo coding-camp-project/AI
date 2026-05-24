@@ -13,7 +13,7 @@ def root():
     return {
         "message": f"{settings.APP_NAME} is Runnig!",
         "version": settings.APP_VERSION,
-        "docs": "check dokumen in endpoint localhost:8173/docs"
+        "docs": "check dokumen in endpoint /docs"
     }
 
 @router.get("/health-check")
