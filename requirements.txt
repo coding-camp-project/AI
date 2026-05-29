@@ -7,4 +7,6 @@ python-multipart==0.0.29
 pillow==12.2.0
 numpy==1.26.4
 pandas==2.2.3
-tensorflow-cpu==2.19.0
+tensorflow
+google-genai
+motor
