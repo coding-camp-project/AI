@@ -3,3 +3,6 @@ venv/
 __pycache__/
 *.pyc
 .vercel/
+./nutrify_model.keras
+indonesia_food_clean.csv
+class_names.json
