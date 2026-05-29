@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     PORT: int 
     
     LOG_LEVEL: str 
+
+    GEMINI_API_KEY: str
+    MONGO_URL: str
     
     model_config = SettingsConfigDict(
         env_file=".env",

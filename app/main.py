@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging, get_logger
 from app.services.dependencies import init_services
-from app.routers import check_system_api, predict, food
+from app.routers import check_system_api, predict, food, chat_route
 
 setup_logging()
 logger = get_logger(__name__)
@@ -57,3 +57,4 @@ app.add_middleware(
 app.include_router(check_system_api.router)
 app.include_router(food.router)
 app.include_router(predict.router)
+app.include_router(chat_route.router)

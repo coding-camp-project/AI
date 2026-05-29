@@ -17,7 +17,8 @@ from app.core.logging_config import get_logger
 from app.services.dependencies import get_cnn_service, get_nutrition_service
 from app.services.cnn_services import CNNService
 from app.services.nutrition_service import NutritionService
-from app.services.recomendation_service import generate_recomendation, VALID_DISEASES
+from app.services.recomendation_service import VALID_DISEASES
+from app.services.recommendation_service import get_food_recommendation
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["Predictions"])
@@ -64,6 +65,10 @@ async def predict(
     image: UploadFile | None = File(default=None),
     disease: str | None = Form(default=None),
     manual_items: str | None = Form(default=None),
+    age: int | None = Form(default=None),
+    weight: float | None = Form(default=None),
+    height: float | None = Form(default=None),
+    goal: str | None = Form(default=None),
     cnn: CNNService = Depends(get_cnn_service),
     nutrition: NutritionService = Depends(get_nutrition_service)
 ):
@@ -88,7 +93,7 @@ async def predict(
         image_result = None
         manual_result = []
         
-        # Gambar
+        # cek dari upload gambar
         if has_image:
             if not image.content_type or not image.content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail="File harus berupa gambar.")
@@ -97,7 +102,7 @@ async def predict(
             pred = cnn.predict(image_bytes)
             
             if pred["best_confidence"] < settings.REJECT_THRESHOLD:
-                # Gambar gak kenal
+                # model ga ngenalin gambarnya
                 image_result = {
                     "recognized": False,
                     "message": "Gambar tidak terdeteksi sebagai makanan yang dikenali",
@@ -132,7 +137,7 @@ async def predict(
                     nutrition_parts.append(nut)
                 primary_food = pred['best_food']
         
-        # Manual items
+        # kalo dari ketikan
         for item in parsed_manual:
             food_name = (item.get('food_name') or "").strip()
             if not food_name:
@@ -169,16 +174,28 @@ async def predict(
             
             manual_result.append(item_result)
 
-        # Gabungan
+        # total nutrisi
         grand_total = nutrition.sum_nutrition(nutrition_parts)
         n_sources = len(nutrition_parts)
         
         if n_sources == 0:
             recomendation = "Tidak ada data nutrisi yang bisa dianalisis"
-        elif n_sources == 1 and primary_food:
-            recomendation = generate_recomendation(primary_food, grand_total, disease)
         else:
-            recomendation = generate_recomendation("Kombinasi makanan", grand_total, disease)
+            user_profile = {}
+            if disease: user_profile["riwayat_penyakit"] = disease
+            if age: user_profile["umur"] = age
+            if weight: user_profile["berat_badan"] = weight
+            if height: user_profile["tinggi_badan"] = height
+            if goal: user_profile["tujuan"] = goal
+            
+            user_profile = user_profile if user_profile else None
+            
+            makanan = primary_food if (n_sources == 1 and primary_food) else "Kombinasi makanan"
+            recomendation = await get_food_recommendation(
+                user_profile=user_profile,
+                food_name=makanan,
+                nutrition_data=grand_total
+            )
         
         return {
             "sucess": True,
