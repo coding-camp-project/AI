@@ -1,3 +1,12 @@
+---
+title: Nutrify AI API
+emoji: 🥗
+colorFrom: green
+colorTo: blue
+sdk: docker
+app_port: 7860
+---
+
 # Selamat Datang di Nutrify AI 
 
 ## Model dan Backend yang disediakan oleh AI Engineer
@@ -39,21 +48,11 @@ kalau mau nambah kek ada banyak item
     {"food_name": "anggur", "quantity": 1, "unit": "buah"}
 ]
 ```
-- `disease` - salah satu aja : `obesitas`, `diabetes`, `hipertensi`, `asam_urat`, `kolesterol
+- `disease` - salah satu aja : `obesitas`, `diabetes`, `hipertensi`, `asam_urat`, `kolesterol`
 
 
 PERHATIKANN!!
 Nama di `manual_items` harus **persis** sesuai hasil `/search-food`.
 
----
-title: Nutrify AI API
-emoji: 🥗
-colorFrom: green
-colorTo: blue
-sdk: docker
-app_port: 7860
----
-
 # Nutrify AI API
 FastAPI service untuk prediksi makanan tradisional Indonesia.
-
