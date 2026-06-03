@@ -17,7 +17,7 @@ from app.core.logging_config import get_logger
 from app.services.dependencies import get_cnn_service, get_nutrition_service
 from app.services.cnn_services import CNNService
 from app.services.nutrition_service import NutritionService
-from app.services.recomendation_service import VALID_DISEASES
+from app.services.recommendation_service import VALID_DISEASES
 from app.services.recommendation_service import get_food_recommendation
 
 logger = get_logger(__name__)

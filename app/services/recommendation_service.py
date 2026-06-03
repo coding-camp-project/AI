@@ -2,10 +2,20 @@ from google import genai
 from google.genai import types
 from app.core.config import settings
 
+VALID_DISEASES = {'obesitas', 'diabetes', 'hipertensi', 'asam_urat', 'kolesterol'}
+
 MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3-pro-preview",
+    "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash"
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-lite",
+    "gemini-pro-latest",
+    "gemini-flash-latest"
 ]
 
 async def get_food_recommendation(user_profile: dict = None, food_name: str = None, nutrition_data: dict = None) -> str:
@@ -35,6 +45,7 @@ async def get_food_recommendation(user_profile: dict = None, food_name: str = No
     
     for model_name in MODELS:
         try:
+            print(f"Mendapatkan rekomendasi menggunakan model: {model_name}")
             response = await client.aio.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -45,6 +56,8 @@ async def get_food_recommendation(user_profile: dict = None, food_name: str = No
             if response.text:
                 return response.text
         except Exception as e:
+            print(f"Model {model_name} gagal: {str(e)}")
             last_error = e
 
+    print("Semua model Gemini gagal digunakan untuk rekomendasi.")
     raise Exception(f"Gagal mendapatkan rekomendasi dari Gemini: {str(last_error)}")

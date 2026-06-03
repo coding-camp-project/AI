@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.services.dependencies import get_nutrition_service
 from app.services.nutrition_service import NutritionService, UNIT_TO_GRAM, DEFAULT_GRAM
-from app.services.recomendation_service import VALID_DISEASES
+from app.services.recommendation_service import VALID_DISEASES
 from app.schemas.schema import SearchFoodResponse
 
 # api router sub
